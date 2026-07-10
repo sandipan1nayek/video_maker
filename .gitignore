@@ -1,0 +1,22 @@
+# Environment variables
+*.env
+.env
+
+# Markdown files
+*.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# OS generated files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,7 @@
+streamlit
+sentence-transformers
+edge-tts
+mutagen
+google-genai
+python-dotenv
+asyncio
