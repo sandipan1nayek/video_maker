@@ -220,16 +220,15 @@ with tab1:
                 generation_config={"response_mime_type": "application/json"}
             )
             raw_text = response.text.strip()
-            if raw_text.startswith("```json"):
-                raw_text = raw_text[7:]
-            if raw_text.startswith("```"):
-                raw_text = raw_text[3:]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-            phrases = json.loads(raw_text.strip())
+            start_idx = raw_text.find('[')
+            end_idx = raw_text.rfind(']')
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                phrases = json.loads(raw_text[start_idx:end_idx + 1])
+            else:
+                phrases = json.loads(raw_text)
         except Exception as e:
-            st.error(f"Gemini Script Splitting Failed: {e}")
-            st.stop()
+            st.warning(f"⚠️ Using deterministic script splitting fallback (Gemini JSON note: {e})")
+            phrases = [p.strip() for p in script_input.split('\n') if p.strip()]
 
         st.write("📋 **Deconstructed Narrative Phases:**")
         st.json(phrases, expanded=False)
