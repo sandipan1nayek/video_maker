@@ -2,6 +2,6 @@ streamlit
 sentence-transformers
 edge-tts
 mutagen
-google-genai
+google-generativeai
 python-dotenv
-asyncio
+imageio-ffmpeg

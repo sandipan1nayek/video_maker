@@ -24,3 +24,9 @@ Thumbs.db
 # Personal Database
 phase2_local/master_database.json
 batch_results.json
+
+
+# Video Assets & Build Output
+phase2_local/raw_assets/
+phase2_local/temp_build/
+*.mp4
