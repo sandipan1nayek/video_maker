@@ -1,9 +1,11 @@
 # Environment variables
-*.env
 .env
+*.env
+!.env.example
 
 # Markdown files
 *.md
+!README.md
 
 # Python
 __pycache__/
@@ -25,8 +27,9 @@ Thumbs.db
 phase2_local/master_database.json
 batch_results.json
 
-
 # Video Assets & Build Output
-phase2_local/raw_assets/
-phase2_local/temp_build/
+phase2_local/raw_assets/*
+!phase2_local/raw_assets/.gitkeep
+phase2_local/temp_build/*
+!phase2_local/temp_build/.gitkeep
 *.mp4
