@@ -106,6 +106,23 @@ def clean_temp_build():
             except Exception:
                 pass
 
+def slice_video_clip(input_path, cut_start, cut_dur, output_path):
+    """Slice and re-encode video segment to standard 1280x720@30fps H.264 I-frame canvas."""
+    cmd = [
+        get_ffmpeg_exe(), "-y",
+        "-ss", str(cut_start),
+        "-t", str(cut_dur),
+        "-i", input_path,
+        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "22",
+        "-an",
+        output_path
+    ]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return res.returncode == 0 and os.path.exists(output_path)
+
 # ---------------------------------------------------------
 # Sidebar - Environment & Status
 # ---------------------------------------------------------
@@ -152,6 +169,9 @@ tab1, tab2 = st.tabs(["⚡ Video Assembly Pipeline", "📂 Database Management"]
 # TAB 1: VIDEO ASSEMBLY PIPELINE
 # =========================================================
 with tab1:
+    if "video_ready" not in st.session_state:
+        st.session_state.video_ready = False
+
     script_input = st.text_area(
         "Enter Voiceover Script",
         placeholder="Type or paste your narrative script here...",
@@ -224,11 +244,13 @@ with tab1:
         db_descriptions = [item["clip_description"] for item in db]
         db_embeddings = model.encode(db_descriptions, convert_to_tensor=True)
 
-        used_clips = []
+        used_clips_global = set()
+        last_phrase_clips = set()
         video_segments = []
         audio_segments = []
 
         total_phrases = len(phrases)
+        MIN_SIM_SCORE = 0.20  # Minimum similarity threshold to prevent irrelevant clip selection
 
         for i, phrase in enumerate(phrases):
             progress_bar.progress((i) / total_phrases)
@@ -243,58 +265,101 @@ with tab1:
             audio_info = MP3(audio_path)
             target_duration = audio_info.info.length
 
-            # C. Semantic Vector Search
+            # C. Semantic Vector Search with Multi-Tier Selection
             phrase_embedding = model.encode(phrase, convert_to_tensor=True)
             similarities = cos_sim(phrase_embedding, db_embeddings)[0]
             sorted_indices = similarities.argsort(descending=True).tolist()
 
             current_video_dur = 0.0
             clips_for_phrase = []
+            current_phrase_clips = set()
 
+            # Pass 1: Strict relevance (score >= MIN_SIM_SCORE, never used yet)
             for idx in sorted_indices:
+                if current_video_dur >= target_duration - 0.05:
+                    break
                 clip = db[idx]
                 clip_id = f"{clip['video_source']}_{clip['start_time']}"
+                score = float(similarities[idx])
 
-                # Anti-repetition guard
-                if clip_id in used_clips:
+                if score < MIN_SIM_SCORE or clip_id in current_phrase_clips or clip_id in used_clips_global:
                     continue
 
                 input_video_path = os.path.join(RAW_ASSETS_DIR, clip["video_source"])
                 if not os.path.exists(input_video_path):
-                    continue  # Skip if source file is not in raw_assets
+                    continue
 
-                used_clips.append(clip_id)
                 clip_dur = float(clip["duration_seconds"])
-                needed_dur = target_duration - current_video_dur
-                cut_dur = min(clip_dur, needed_dur)
+                cut_dur = min(clip_dur, target_duration - current_video_dur)
                 cut_start = time_to_seconds(clip["start_time"])
-
                 output_cut = os.path.join(TEMP_BUILD_DIR, f"p{i}_clip{len(clips_for_phrase)}.mp4")
 
-                # Non-destructive fast stream copy slice
-                cmd_cut = [
-                    get_ffmpeg_exe(), "-y",
-                    "-ss", str(cut_start),
-                    "-t", str(cut_dur),
-                    "-i", input_video_path,
-                    "-an",          # Mute original clip audio
-                    "-c:v", "copy", # Fast stream copy
-                    output_cut
-                ]
-                res = subprocess.run(cmd_cut, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                if res.returncode == 0 and os.path.exists(output_cut):
+                if slice_video_clip(input_video_path, cut_start, cut_dur, output_cut):
                     clips_for_phrase.append(output_cut)
+                    current_phrase_clips.add(clip_id)
+                    used_clips_global.add(clip_id)
                     current_video_dur += cut_dur
 
-                if current_video_dur >= target_duration - 0.05:
-                    break
+            # Pass 2: Controlled non-adjacent reuse if more duration is needed (score >= MIN_SIM_SCORE)
+            if current_video_dur < target_duration - 0.05:
+                for idx in sorted_indices:
+                    if current_video_dur >= target_duration - 0.05:
+                        break
+                    clip = db[idx]
+                    clip_id = f"{clip['video_source']}_{clip['start_time']}"
+                    score = float(similarities[idx])
+
+                    if score < MIN_SIM_SCORE or clip_id in current_phrase_clips or clip_id in last_phrase_clips:
+                        continue
+
+                    input_video_path = os.path.join(RAW_ASSETS_DIR, clip["video_source"])
+                    if not os.path.exists(input_video_path):
+                        continue
+
+                    clip_dur = float(clip["duration_seconds"])
+                    cut_dur = min(clip_dur, target_duration - current_video_dur)
+                    cut_start = time_to_seconds(clip["start_time"])
+                    output_cut = os.path.join(TEMP_BUILD_DIR, f"p{i}_clip{len(clips_for_phrase)}.mp4")
+
+                    if slice_video_clip(input_video_path, cut_start, cut_dur, output_cut):
+                        clips_for_phrase.append(output_cut)
+                        current_phrase_clips.add(clip_id)
+                        used_clips_global.add(clip_id)
+                        current_video_dur += cut_dur
+
+            # Pass 3: Emergency fallback if no clip met threshold (take best non-adjacent available)
+            if current_video_dur < target_duration - 0.05:
+                for idx in sorted_indices:
+                    if current_video_dur >= target_duration - 0.05:
+                        break
+                    clip = db[idx]
+                    clip_id = f"{clip['video_source']}_{clip['start_time']}"
+
+                    if clip_id in current_phrase_clips or clip_id in last_phrase_clips:
+                        continue
+
+                    input_video_path = os.path.join(RAW_ASSETS_DIR, clip["video_source"])
+                    if not os.path.exists(input_video_path):
+                        continue
+
+                    clip_dur = float(clip["duration_seconds"])
+                    cut_dur = min(clip_dur, target_duration - current_video_dur)
+                    cut_start = time_to_seconds(clip["start_time"])
+                    output_cut = os.path.join(TEMP_BUILD_DIR, f"p{i}_clip{len(clips_for_phrase)}.mp4")
+
+                    if slice_video_clip(input_video_path, cut_start, cut_dur, output_cut):
+                        clips_for_phrase.append(output_cut)
+                        current_phrase_clips.add(clip_id)
+                        used_clips_global.add(clip_id)
+                        current_video_dur += cut_dur
+
+            last_phrase_clips = current_phrase_clips
 
             # Handle chaining if multiple clips were needed to cover duration
             if len(clips_for_phrase) > 1:
                 list_file = os.path.join(TEMP_BUILD_DIR, f"concat_p{i}.txt")
                 with open(list_file, "w", encoding="utf-8") as f:
                     for c in clips_for_phrase:
-                        # Use forward slashes inside ffmpeg list file
                         f.write(f"file '{os.path.abspath(c).replace(os.sep, '/')}'\n")
 
                 merged_vid = os.path.join(TEMP_BUILD_DIR, f"merged_p{i}.mp4")
@@ -342,13 +407,15 @@ with tab1:
         ]
         subprocess.run(cmd_concat_aud, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # Mux Video + Audio into final_render.mp4
+        # Mux Video + Audio into final_render.mp4 with web browser faststart compatibility
         cmd_mux = [
             get_ffmpeg_exe(), "-y",
             "-i", final_video_only,
             "-i", final_audio_only,
             "-c:v", "copy",
             "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
             OUTPUT_FILE
         ]
         mux_res = subprocess.run(cmd_mux, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -357,15 +424,23 @@ with tab1:
 
         if mux_res.returncode == 0 and os.path.exists(OUTPUT_FILE):
             status_box.success("🎉 Video Assembly Successfully Completed!")
-            st.video(OUTPUT_FILE)
-            st.download_button(
-                label="⬇️ Download Final Render",
-                data=open(OUTPUT_FILE, "rb").read(),
-                file_name="final_render.mp4",
-                mime="video/mp4"
-            )
+            st.session_state.video_ready = True
         else:
             st.error("❌ FFmpeg Muxing failed. Check logs.")
+
+    # Persistent output rendering outside the assemble_btn trigger block
+    if st.session_state.get("video_ready", False) and os.path.exists(OUTPUT_FILE):
+        st.divider()
+        st.subheader("📺 Rendered Video Output")
+        st.video(OUTPUT_FILE)
+        with open(OUTPUT_FILE, "rb") as f:
+            st.download_button(
+                label="⬇️ Download Final Render",
+                data=f.read(),
+                file_name="final_render.mp4",
+                mime="video/mp4",
+                key="download_final_video_btn"
+            )
 
 # =========================================================
 # TAB 2: DATABASE MANAGEMENT
