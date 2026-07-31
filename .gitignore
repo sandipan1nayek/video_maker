@@ -33,3 +33,4 @@ phase2_local/raw_assets/*
 phase2_local/temp_build/*
 !phase2_local/temp_build/.gitkeep
 *.mp4
+*.docx
