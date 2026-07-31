@@ -25,7 +25,7 @@ st.set_page_config(
 load_dotenv()
 
 # Configuration Paths & Directories
-DB_PATH = "master_database.json"
+DB_PATH = "master_database.jsonl"
 RAW_ASSETS_DIR = "raw_assets"
 TEMP_BUILD_DIR = "temp_build"
 OUTPUT_FILE = "final_render.mp4"
@@ -46,17 +46,22 @@ def load_database():
     """Load the master database containing video clip metadata."""
     if not os.path.exists(DB_PATH):
         return []
+    db_data = []
     try:
         with open(DB_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            for line in f:
+                if line.strip():
+                    db_data.append(json.loads(line))
+        return db_data
     except Exception as e:
         st.error(f"Error loading database: {e}")
         return []
 
 def save_database(data):
-    """Save the updated metadata array to master_database.json."""
+    """Save the updated metadata array to master_database.jsonl."""
     with open(DB_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+        for clip in data:
+            f.write(json.dumps(clip, ensure_ascii=False) + "\n")
 
 def time_to_seconds(time_str):
     """Convert HH:MM:SS format into float seconds."""
@@ -154,7 +159,7 @@ st.sidebar.markdown(
     "**Local Assets Directory:**\n"
     "`raw_assets/` (Place `.mp4` source clips here)\n\n"
     "**Master Database:**\n"
-    "`master_database.json`"
+    "`master_database.jsonl`"
 )
 
 # ---------------------------------------------------------
@@ -476,14 +481,15 @@ with tab2:
         del st.session_state.last_append_msg
 
     uploaded_file = st.file_uploader(
-        "Upload `batch_results.json` from Phase 1",
-        type=["json"],
+        "Upload `batch_results.jsonl` from Phase 1",
+        type=["jsonl", "json"],
         key=f"json_uploader_{st.session_state.uploader_key}"
     )
     if uploaded_file is not None:
         if st.button("➕ Confirm & Append to Database", type="primary"):
             try:
-                new_data = json.load(uploaded_file)
+                content_bytes = uploaded_file.getvalue().decode("utf-8")
+                new_data = [json.loads(line) for line in content_bytes.splitlines() if line.strip()]
                 if isinstance(new_data, list):
                     existing_keys = {
                         (item.get("video_source"), item.get("start_time"), item.get("end_time"))
@@ -508,7 +514,7 @@ with tab2:
                     st.session_state.uploader_key += 1
                     st.rerun()
             except Exception as e:
-                st.session_state.last_append_msg = ("error", f"Error importing JSON: {e}")
+                st.session_state.last_append_msg = ("error", f"Error importing JSONL: {e}")
                 st.session_state.uploader_key += 1
                 st.rerun()
 
