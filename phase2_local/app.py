@@ -5,9 +5,10 @@ import shutil
 import subprocess
 import asyncio
 import edge_tts
+import numpy as np
+from datetime import datetime
 from mutagen.mp3 import MP3
-from sentence_transformers import SentenceTransformer
-from sentence_transformers.util import cos_sim
+from fastembed import TextEmbedding
 import google.generativeai as genai
 from dotenv import load_dotenv
 
@@ -37,10 +38,10 @@ os.makedirs(TEMP_BUILD_DIR, exist_ok=True)
 # ---------------------------------------------------------
 # Helper Functions & Resource Caching
 # ---------------------------------------------------------
-@st.cache_resource(show_spinner="Loading semantic embedding model...")
+@st.cache_resource(show_spinner="Loading ONNX FastEmbed CPU Model (BAAI/bge-large-en-v1.5)...")
 def get_embedding_model():
-    """Load lightweight local SentenceTransformer model."""
-    return SentenceTransformer('all-MiniLM-L6-v2')
+    """Load lightweight quantized ONNX engine for CPU."""
+    return TextEmbedding(model_name="BAAI/bge-large-en-v1.5")
 
 def load_database():
     """Load the master database containing video clip metadata."""
@@ -244,9 +245,12 @@ with tab1:
         status_box.info("🔊 Step 2/4: Synthesizing neural voiceover & performing semantic vector search...")
         model = get_embedding_model()
 
-        # Pre-compute database embeddings
-        db_descriptions = [item["clip_description"] for item in db]
-        db_embeddings = model.encode(db_descriptions, convert_to_tensor=True)
+        # Load pre-computed 1024-dim tensors directly from the database
+        if not db or "embedding" not in db[0]:
+            st.error("Your master database is corrupted or outdated! It does not contain pre-computed embeddings. Please clear it in Tab 2 and upload a fresh Phase 1 batch_results.jsonl.")
+            st.stop()
+        
+        db_embeddings = np.array([item["embedding"] for item in db])
 
         used_clips_global = set()
         last_phrase_clips = set()
@@ -270,9 +274,11 @@ with tab1:
             target_duration = audio_info.info.length
 
             # C. Semantic Vector Search with Multi-Tier Selection
-            phrase_embedding = model.encode(phrase, convert_to_tensor=True)
-            similarities = cos_sim(phrase_embedding, db_embeddings)[0]
-            sorted_indices = similarities.argsort(descending=True).tolist()
+            phrase_embedding = list(model.embed([phrase]))[0]
+            # Fast numpy cosine similarity
+            norms = np.linalg.norm(db_embeddings, axis=1) * np.linalg.norm(phrase_embedding)
+            similarities = np.dot(db_embeddings, phrase_embedding) / norms
+            sorted_indices = np.argsort(similarities)[::-1].tolist()
 
             current_video_dur = 0.0
             clips_for_phrase = []
@@ -496,9 +502,11 @@ with tab2:
                         for item in db_data
                     }
                     added_count = 0
+                    current_time = datetime.now().isoformat()
                     for clip in new_data:
                         key = (clip.get("video_source"), clip.get("start_time"), clip.get("end_time"))
                         if key not in existing_keys:
+                            clip["imported_at"] = current_time
                             db_data.append(clip)
                             existing_keys.add(key)
                             added_count += 1
@@ -520,3 +528,23 @@ with tab2:
 
     with st.expander("🔍 Preview First 10 Database Entries"):
         st.json(db_data[:10] if db_data else [])
+
+    st.divider()
+    st.subheader("⚠️ Danger Zone")
+    with st.expander("Database Deletion Controls"):
+        if st.button("🗑️ Wipe Entire Database", type="primary", use_container_width=True):
+            save_database([])
+            st.success("Database wiped successfully!")
+            st.rerun()
+            
+        st.markdown("**Delete Specific Import Batch**")
+        if db_data:
+            unique_imports = sorted(list(set(item.get("imported_at", "Legacy Data") for item in db_data)), reverse=True)
+            batch_to_delete = st.selectbox("Select Import Timestamp to Delete", unique_imports)
+            if st.button("Delete Selected Batch"):
+                new_db = [item for item in db_data if item.get("imported_at", "Legacy Data") != batch_to_delete]
+                save_database(new_db)
+                st.success(f"Deleted {len(db_data) - len(new_db)} clips from batch {batch_to_delete}")
+                st.rerun()
+        else:
+            st.info("Database is empty.")
