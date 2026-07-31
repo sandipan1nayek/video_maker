@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/34cf771a-ce29-4952-b53a-7e1a6962c085
+
 # 🎬 AI Video Assembly Engine
 **An End-to-End Automated Video Production Pipeline combining Cloud VLM Indexing (Florence-2 & Gemini Flash Latest) with Local High-Precision Assembly (edge-tts, Precomputed Vector Search & FFmpeg).**
 
@@ -11,21 +15,7 @@ The **AI Video Assembly Engine** is a two-phase mono-repository designed to tran
 
 ---
 
-## 📸 Demo Showcase & Streamlit Frontend
 
-### 🖥️ Streamlit Interactive UI (Phase 2)
-*(Place your Streamlit frontend screenshot in `assets/streamlit_frontend.png`)*
-```markdown
-![Streamlit Assembly Workspace](assets/streamlit_frontend.png)
-```
-
-### 🎞️ Generated Output Video Demo
-*(Place your generated output MP4 or GIF in `assets/demo_output.mp4`)*
-```markdown
-![Final Rendered Video Demo](assets/demo_output.mp4)
-```
-
----
 
 ## 🏗️ End-to-End System Architecture
 
